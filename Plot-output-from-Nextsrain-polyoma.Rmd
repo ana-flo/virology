@@ -1,0 +1,136 @@
+---
+title: "Nextstrain parsing - polyoma"
+author: "AFL"
+date: "7/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(jsonlite)
+library(data.table)
+library(dplyr)
+library(treeio)
+library(ggrepel)
+library(caper)
+library(viridis)
+library(RColorBrewer)
+library(tidytree)
+library(scales)
+#library(phangorn)
+```
+
+##Define colorschemes 
+
+```{r}
+PolyomaColors <- c("Ia"="#B6992D","Ib-1"="#F28E2B","Ib-2"="#FFBE7D","Ic"="#F1CE62","II"="#4E79A7", "III"="#59A14F", "IVa-1"="#E15759","IVa-2"="#FF9D9A","IVb-1,2"="#D37295", "IVc-1"="#FABFD2","IVc-2"="#B07AA1", "unknown"="#BAB0AC")
+PolyomaColorsType <- c("I"="#F28E2B","II"="#4E79A7", "III"="#59A14F", "IV"="#E15759", "unknown"="#BAB0AC")
+
+```
+
+## Metadata - plot region and genotype
+
+This uses the metadata file as exported from 
+
+```{r}
+df.metadata <- read.table("C:/data/Viruses/Polyoma/nextstrain__metadata.txt", sep="\t", header=TRUE)
+df.metadata$Genotype <- recode(df.metadata$VP1_Subtype, "Ia"="I","Ib-1"="I","Ib-2"="I","Ic"="I", "IVa-1"="IV","IVa-2"="IV","IVb-1,2"="IV", "IVc-1"="IV","IVc-2"="IV")
+```
+
+```{r}
+ggplot(data = df.metadata, aes(x = region, fill = Genotype)) +
+    geom_bar(position = "fill") + ylab("proportion")+scale_fill_manual(values=PolyomaColorsType)+theme_light()+
+   theme(panel.spacing = unit(0.75, "lines"),axis.line = element_line(colour = "black"),text = element_text(size=20),
+        axis.text.x = element_text(size=24, angle=45, hjust=0.95), axis.text.y = element_text(size=24),axis.title.x = element_text(size=24),axis.title.y = element_text(size=24), strip.text.y = element_text(size = 35, angle= 90, lineheight = 10),strip.text.x = element_text(size = 30, angle= 45), legend.text=element_text(size=30))
+#ggsave("C:/Users/aflorescu/Molecular Partners AG/DEV_TP_ExVivo - Ana/Projects/Polyoma/distribution.mainstrains.png",  height=8, width=10)
+```
+
+# Parse mutations to all seuqences and nodes 
+
+```{r}
+df.json <- read_json("C:/data/Viruses/Polyoma/polyoma-root/results/aa_muts.json",simplifyDataFrame = TRUE)
+df.nodes <- df.json[["nodes"]]
+df <-BiocGenerics::unlist(df.nodes)
+sequence_names <- names(df.nodes)
+muts <- matrix(nrow=length(sequence_names), ncol=3)
+for (i in 1:length(sequence_names)){
+  tt <- unlist(df.json[["nodes"]][[sequence_names[i]]][["aa_muts"]][["BKPyVgp4"]])
+  if (is.null(tt)) tt <- NA
+ if(!is.na(tt)) muts[[i,2]]<-length(tt) else muts[[i,2]]<-0
+  muts[[i,3]] <- paste(tt, sep=",", collapse = ",")
+  muts[[i,1]]<-sequence_names[i]
+}  
+colnames(muts) <- c("Strain", "VP1  mutation count", "VP1 mutations")
+muts.df <- data.frame(muts)
+#df.metadata <- merge(df.metadata,muts, by="Strain")
+```
+## Extract aa mutations in VP1 and add them to metadata
+
+```{r}
+tt <- read.newick("C:/data/Viruses/Polyoma/polyoma-root/results/tree.nwk")
+#df.clades <- clade.members.list(tt, tips = TRUE, tip.labels = TRUE, include.nodes = TRUE)
+#mat.clades <- clade.matrix(tt)
+tt1 <- tidytree::as_tibble(tt)
+muts.all <- matrix(nrow=nrow(df.metadata), ncol=3)
+
+
+for (i in 1: nrow(df.metadata)){
+  node.ind <-tt1$node[which(tt1$label==df.metadata$strain[i])]
+  ancestor.vec <- ancestor(tt1, node.ind)$label
+  muts.all[[i,2]] <- muts.df$VP1.mutations[which(muts.df$Strain==df.metadata$strain[i])]
+  for (j in 1:length(ancestor.vec)){
+    muts.all[[i,2]] <- paste(muts.all[[i,2]],muts.df$VP1.mutations[which(muts.df$Strain==ancestor.vec[j])],sep=",")
+  }
+     muts.all[[i,2]] <- gsub("NA,", "",muts.all[[i,2]])
+    muts.all[[i,2]] <- gsub(",NA", "",muts.all[[i,2]])
+    muts.all[[i,3]] <- length(unlist(str_split(muts.all[[i,2]],",")))
+    muts.all[[i,1]] <- df.metadata$strain[i]
+    
+}
+
+muts.all.df <- data.frame(muts.all)
+colnames(muts.all.df)<-c("strain", "VP1 mutations", "VP1 mutation count")
+df.metadata <- merge(df.metadata,muts.all.df, by="strain")
+df.metadata$`VP1 mutation count` <-as.numeric(df.metadata$`VP1 mutation count` )
+#write.table(df.metadata, "C:/Users/aflorescu/Molecular Partners AG/DEV_TP_ExVivo - Ana/Projects/Polyoma/Polyoma_BK_full_sequences_metadata_with_VP1_mutation", row.names = FALSE, quote = FALSE, sep="\t")
+```
+
+
+```{r}
+
+ggplot(data = df.metadata, aes(x = region, fill = as.factor(`VP1 mutation count`))) +
+    geom_bar(position = "fill") + ylab("proportion")+theme_light() +
+   theme(panel.spacing = unit(0.75, "lines"),axis.line = element_line(colour = "black"),text = element_text(size=20),
+        axis.text.x = element_text(size=24, angle=45, hjust=0.95), axis.text.y = element_text(size=24),axis.title.x = element_text(size=24),axis.title.y = element_text(size=24), strip.text.y = element_text(size = 35, angle= 90, lineheight = 10),strip.text.x = element_text(size = 30, angle= 45), legend.text=element_text(size=30))+
+  guides(fill = guide_legend(title = "Mutations in VP1"))
+#ggsave("C:/Users/aflorescu/Molecular Partners AG/DEV_TP_ExVivo - Ana/Projects/Polyoma/distribution.VP1 mutations.per.region.png",  height=8, width=12)
+```
+```{r}
+df.table <- data.frame(table(df.metadata$`VP1 mutation count`))
+df.table$Freq <- df.table$Freq/sum(df.table$Freq)*100
+ggplot(df.table, aes(x = "" , y = Freq, fill = as.factor(Var1))) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar(theta = "y", start = 0 ) +
+  #geom_label(aes(label = paste(round(Freq, digits=2), "%")), size=4, show.legend = F, nudge_x = 1) +
+  guides(fill = guide_legend(title = "Mutations in VP1 ")) +
+  theme_void()
+```
+
+
+```{r}
+#df.metadata <- df.metadata0
+df.metadata <- filter(df.metadata , VP1_Subtype %in% c("Ic"))
+muts.string <- df.metadata$`VP1 mutations` #[-which( df.metadata$`VP1 mutations`=="NA")]
+muts.string.split <- unlist(strsplit(muts.string,","))
+muts.df.sub <- data.frame(table(muts.string.split)/nrow(df.metadata)*100)
+
+muts.df.all <- data.frame(table(muts.string.split)/nrow(df.metadata))
+
+ggplot(muts.df.all %>% filter(Freq >0.25), aes(x=reorder(muts.string.split,-Freq), y=Freq, fill=Freq))+geom_bar(position="dodge",stat = "identity")+theme_light()+scale_fill_viridis()+
+   theme(panel.spacing = unit(0.75, "lines"),axis.line = element_line(colour = "black"),text = element_text(size=20),
+        axis.text.x = element_text(size=24, angle=45, hjust=0.95), axis.text.y = element_text(size=24),axis.title.x = element_text(size=24),axis.title.y = element_text(size=20), strip.text.y = element_text(size = 35, angle= 90, lineheight = 10),strip.text.x = element_text(size = 30), legend.text=element_text(size=30))+xlab("Mutation")+ylab("Freq. of occurences")
+#ggsave("C:/Users/aflorescu/Molecular Partners AG/DEV_TP_ExVivo - Ana/Projects/polyoma/waterfall.VP1 mutations.allstrains.png",  height=10, width=14)
+#write.table(muts.df.all, "C:/data/Viruses/Polyoma/polyoma-root/results/VP1-mutation-frequency-all-strains.txt", sep="\t", row.names=FALSE)
+```

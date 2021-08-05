@@ -1,0 +1,108 @@
+---
+title: "genebank file parsing"
+author: "AFL"
+date: "6/23/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(read.gb)
+```
+
+This scripts parses genebank files to extract metadata. The use is for virology, to plug into nextstrain. Nextstrain requirements include: sequence name, date in YYYY-MM-DD format (missing values for month and date could be replaced by XX), species, country, region and length. 
+
+If collection date is not available sequence data will be added. An extra column called date_type should be included to mark if it was collection date or submission date. 
+
+A genotype column should also be added, either read from the annotation or through a separate tool. 
+
+
+```{r}
+df <- read.gb("C:/data/Viruses/parainfluenza/parainfluenza-strain-2-complete-genome.gb", DNA = FALSE, Type = "full", Source = "File")
+```
+
+```{r}
+tt <- extract.gb(df, "source")
+meta.data <- tt[[1]]$source$Qualifier
+tt.unlisted <- unlist(tt, recursive=FALSE)
+tt.df <- bind_rows(tt.unlisted,  .id = "id" )
+```
+
+tt.df now requires the following - transpose then parse the length by removing the "1.." from the first fields of source, parse collection date from LOCUS, go back to the gb file and read submission date. fill country with institution?? 
+
+
+```{r}
+meta.data<- pivot_wider(tt.df, names_from = Location, values_from = Qualifier)
+meta.data$id <- gsub(".source", "", meta.data$id)
+meta.data$length <- str_sub(meta.data$source,4)
+```
+
+Extract locus and add bits to meta-data:
+
+```{r}
+locus.data <- extract.gb(df, "LOCUS")
+locus.unlisted <- unlist(locus.data, recursive=FALSE)
+locus.df <- bind_rows(locus.unlisted,  .id = "id" )
+#now pick extract the last 11 characters for the data and 10-13 for length
+locus.t <- data.frame(sequence=colnames(locus.df), t(locus.df))
+locus.t$id <- gsub(".LOCUS", "", locus.t$sequence)
+locus.t$date<-  str_sub( locus.t$t.locus.df., -11,-1)
+locus.t$date <- as.Date(locus.t$date,format = "%d-%b-%Y") #date format is %D day, %b abbreviated month
+meta.data<- merge(meta.data, locus.t[,c(3,4)], by="id")
+meta.data$source<- NULL
+meta.data$altitude<-NULL
+meta.data$collected_by<-NULL
+meta.data$culture_collection<-NULL
+meta.data$country <- gsub("\\:.*$", "", meta.data$country)
+meta.data$strain <- meta.data$id
+meta.data$accession <- meta.data$id
+meta.data$id <- NULL 
+meta.data$virus <- "parainfluenza II"
+meta.data$region <- meta.data$country
+meta.data$region <- recode(meta.data$region, "Argentina"="South America","Australia"="Oceania", "Austria"="Europe", "Bangladesh"="Southeast Asia", "Belarus"="Europe",
+                    "Brazil"="South America" ,"Bulgaria"="Europe", "Chad" = "Africa", "Cameroon"="Africa", "Central African Republic"="Africa", "Cuba"="South America",
+                    "China"="Asia","Czech Republic"="Europe", "Egypt"="Africa", "Ethiopia"="Africa","Finland"="Europe","France"="Europe", "Germany"="Europe", "Ghana"="Africa",
+                    "Greece"="Europe","Hungary"="Europe", "India"="Southeast Asia", "Iraq"="Middle East","Iran"="Middle East", "Ireland"="Europe", "Israel"="Europe", "Italy"="Europe", 
+                    "Japan"="Asia", "Kenya"="Africa", "Kuwait"="Middle East","Mauritania"="Africa", "Mongolia"="Asia", "Myanmar"="Southeast Asia", "Netherlands"="Europe", "Niger"="Africa", 
+                    "Norway"="Europe","Philippines"="Southeast Asia", "Poland"="Europe","Saudi Arabia"="Middle East", "Singapore"="Southeast Asia",  "South Africa"="Africa",
+                    "Spain"="Europe" , "Sri Lanka"="Southeast Asia", "Sweden"="Europe",  "Thailand"="Southeast Asia" 
+                    ,"Tunisia"="Africa", "Turkey"="Europe", "United Kingdom"="Europe" ,"Viet Nam"="Southeast Asia", "USA"="North America", "Russia"="Europe", "Soth Korea"="Asia", "Switzerland"="Europe", "Uganda"="Africa", "Croatia"="Europe", "Mexico"="North America" , "Peru"="South America", "Zambia"="Africa")
+meta.data$chromosome <- NULL
+meta.data$lab_host <- NULL 
+meta.data$clone <- NULL
+meta.data$serotype <- "II"
+meta.data$isolate<-NULL
+meta.data$`/environmental_sample`<-NULL
+meta.data$note<-NULL
+meta.data$PCR_primers<- NULL
+meta.data$isolation_source<-NULL
+for (i in 1:ncol(meta.data)){
+  for (j in 1:nrow(meta.data)){
+    
+    if (is.null(meta.data[[j,i]])) meta.data[[j,i]] <- NA
+  }
+}
+
+#meta.data <- meta.data[,c(9,7,15,1:6,8,9,12,13,14,10)]
+fwrite(meta.data, "C:/data/Viruses/Parainfluenza/metadata-full-sequences-parainfluenza-II.tsv",  sep="\t", quote = FALSE)
+```
+Parse collection date (not functional yet)
+
+```{r}
+temp<- as.Date(meta.data$collection_date,tryFormats = c("%d-%b-%Y", "%d-%m-%Y", "%Y"), optional = TRUE) 
+```
+
+
+Read file with genotyping data and add to meta data (for polyoma, where genotyping is done with a separate tool):
+
+```{r}
+
+df.geno <- read.table("C:/data/Viruses/Polyoma/Polyoma-genotyping-filtered-sequence.csv", sep="\t", header=TRUE)
+colnames(df.geno)[2]<- "accession"
+meta.data <- merge(meta.data, df.geno[,c(2:7)], by="accession", all.x = TRUE)
+write.table(meta.data, "C:/data/Viruses/Polyoma/metadata-full-sequences-polyoma.tsv", row.names = FALSE, sep="\t", quote = FALSE)
+
+```
+
+
